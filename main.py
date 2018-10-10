@@ -98,12 +98,14 @@ class Q_Learning(object):
                 self.preprocess()
                 # Ensure batch size is 4
                 if len(self.frames) == 4:
-                    self.update()
+                    self.forward()
+                    reward = self.game.make_action(self.e_greedy(), self.cfg.skiprate)
+                    rewards.append(reward)
                     # Remove oldest frame
                     self.frames.pop(0)
             rewards.append(self.game.get_total_reward())
 
-        print(np.asarray(rewards)/self.cfg.test_episodes)
+        print("Average Reward: ", sum(rewards)/self.cfg.test_episodes)
 
 def main(cfg):
     model = Q_Learning(cfg)
