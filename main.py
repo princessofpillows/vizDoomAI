@@ -42,7 +42,7 @@ class Q_Learning(object):
         # Perform forward pass, construct graph
         with tf.GradientTape() as tape:
             self.forward()
-            reward = self.game.make_action(self.e_greedy())
+            reward = self.game.make_action(self.e_greedy(), self.cfg.skiprate)
             loss = tf.losses.mean_squared_error(reward + self.cfg.discount * self.new_q, self.old_q)
 
         # Compute/apply gradients

@@ -72,6 +72,10 @@ model_arg.add_argument("--num_actions", type=int,
                        default=3,
                        help="Number of possible actions to take")
 
+model_arg.add_argument("--skiprate", type=int,
+                       default=3,
+                       help="Number of frames to skip during each action")
+
 model_arg.add_argument("--activ",
                        default=tf.nn.relu,
                        help="Activation function to use")
