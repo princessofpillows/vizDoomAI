@@ -8,9 +8,9 @@ arg_lists = []
 parser = argparse.ArgumentParser()
 
 # Possible actions
-shoot = [0, 0, 1]
 left = [1, 0, 0]
 right = [0, 1, 0]
+shoot = [0, 0, 1]
 
 
 # ----------------------------------------
@@ -33,7 +33,7 @@ pre_arg.add_argument("--resolution", type=int,
 train_arg = add_argument_group("Training")
 
 train_arg.add_argument("--learning_rate", type=float,
-                       default=1e-2,
+                       default=1e-5,
                        help="Learning rate (gradient step size)")
 
 train_arg.add_argument("--discount", type=float,
@@ -52,6 +52,10 @@ train_arg.add_argument("--freq", type=int,
                        default=10,
                        help="Frequency to decrease epsilon")
 
+train_arg.add_argument("--log_dir", type=str,
+                       default="./logs",
+                       help="Directory to save logs and current model")
+
 # ----------------------------------------
 # Arguments for testing
 test_arg = add_argument_group("Testing")
@@ -65,7 +69,7 @@ test_arg.add_argument("--test_episodes", type=int,
 model_arg = add_argument_group("Model")
 
 model_arg.add_argument("--actions", type=int,
-                       default=[shoot, left, right],
+                       default=[left, right, shoot],
                        help="Possible actions to take")
 
 model_arg.add_argument("--num_actions", type=int,
