@@ -8,9 +8,9 @@ arg_lists = []
 parser = argparse.ArgumentParser()
 
 # Possible actions
-left = [1, 0, 0]
-right = [0, 1, 0]
-shoot = [0, 0, 1]
+shoot = [1, 0, 0]
+left = [0, 1, 0]
+right = [0, 0, 1]
 
 
 # ----------------------------------------
@@ -52,6 +52,10 @@ train_arg.add_argument("--freq", type=int,
                        default=10,
                        help="Frequency to decrease epsilon")
 
+train_arg.add_argument("--entropy_rate", type=int,
+                       default=1e-2,
+                       help="Ratio of entropy regularization to apply to loss")
+
 train_arg.add_argument("--log_dir", type=str,
                        default="./logs",
                        help="Directory to save logs and current model")
@@ -69,7 +73,7 @@ test_arg.add_argument("--test_episodes", type=int,
 model_arg = add_argument_group("Model")
 
 model_arg.add_argument("--actions", type=int,
-                       default=[left, right, shoot],
+                       default=[shoot, left, right],
                        help="Possible actions to take")
 
 model_arg.add_argument("--num_actions", type=int,
@@ -85,7 +89,7 @@ model_arg.add_argument("--activ",
                        help="Activation function to use")
 
 model_arg.add_argument("--init",
-                       default=tf.keras.initializers.he_normal(),
+                       default=tf.contrib.layers.xavier_initializer(),
                        help="Initialization function to use")
 
 # ----------------------------------------
