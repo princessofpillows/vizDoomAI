@@ -21,19 +21,11 @@ def add_argument_group(name):
     return arg
 
 # ----------------------------------------
-# Arguments for preprocessing
-pre_arg = add_argument_group("Preprocessing")
-
-pre_arg.add_argument("--resolution", type=int,
-                       default=(84, 84),
-                       help="Resize dimensions for input")
-
-# ----------------------------------------
 # Arguments for training
 train_arg = add_argument_group("Training")
 
 train_arg.add_argument("--learning_rate", type=float,
-                       default=1e-5,
+                       default=1e-4,
                        help="Learning rate (gradient step size)")
 
 train_arg.add_argument("--discount", type=float,
@@ -56,6 +48,10 @@ train_arg.add_argument("--entropy_rate", type=int,
                        default=1e-2,
                        help="Ratio of entropy regularization to apply to loss")
 
+train_arg.add_argument("--batch_size", type=int,
+                       default=100,
+                       help="Number of experiences to sample from memory")
+
 train_arg.add_argument("--log_dir", type=str,
                        default="./logs",
                        help="Directory to save logs and current model")
@@ -65,7 +61,7 @@ train_arg.add_argument("--log_dir", type=str,
 test_arg = add_argument_group("Testing")
 
 test_arg.add_argument("--test_episodes", type=int,
-                       default=10,
+                       default=100,
                        help="Number of episodes to test on")
 
 # ----------------------------------------
@@ -91,6 +87,14 @@ model_arg.add_argument("--activ",
 model_arg.add_argument("--init",
                        default=tf.contrib.layers.xavier_initializer(),
                        help="Initialization function to use")
+
+# ----------------------------------------
+# Arguments for memory
+mem_arg = add_argument_group("Memory")
+
+mem_arg.add_argument("--cap", type=int,
+                       default=50000,
+                       help="Maximum number of transitions in replay memory")
 
 # ----------------------------------------
 # Function to be called externally

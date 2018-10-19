@@ -4,10 +4,32 @@ import numpy as np
 import random, cProfile, pstats
 from tqdm import trange
 from config import get_config
-from utils.diagnostic import diagnostic
 
 
 tf.enable_eager_execution()
+
+class replay_memory(object):
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.memory = []
+
+    def push(self, exp):
+        # Remove oldest memory first
+        if len(self.memory) == self.cfg.cap:
+            self.memory.pop(random.randint(0, len(self.memory)))
+        self.memory.append(exp)
+    
+    def fetch(self):
+        # Select batch
+        if len(self.memory) < self.cfg.batch_size:
+            batch = random.sample(self.memory, len(self.memory))
+        else:
+            batch = random.sample(self.memory, self.cfg.batch_size)
+        # Return batch
+        batch = np.asarray(batch, dtype=object)
+        return zip(*batch)
+
 
 class Q_Learning(object):
 
@@ -15,10 +37,12 @@ class Q_Learning(object):
         super(Q_Learning, self).__init__()
 
         self.cfg = cfg
+        self.replay_memory = replay_memory(cfg)
 
         self.game = vzd.DoomGame()
         self.game.load_config("vizdoom/scenarios/basic.cfg")
         self.game.init()
+        self.terminal = tf.zeros([84, 84, 1])
 
         self.global_step = tf.train.get_or_create_global_step()
         self.writer = tf.contrib.summary.create_file_writer(self.cfg.log_dir)
@@ -34,28 +58,15 @@ class Q_Learning(object):
             tf.keras.layers.Dense(self.cfg.num_actions, kernel_initializer=self.cfg.init)
         ])
         # Specify input size
-        self.model.build((4, 84, 84, 1))
+        self.model.build((None, 84, 84, 4))
         self.optimizer = tf.train.AdamOptimizer(self.cfg.learning_rate)
-    
-    def preprocess(self):
-        screen = self.game.get_state().screen_buffer
-        screen = np.multiply(screen, 255.0/screen.max())
-        #screen = tf.image.per_image_standardization(state.screen_buffer)
-        screen = tf.image.rgb_to_grayscale(screen)
-        self.screen = tf.image.resize_images(screen, self.cfg.resolution)
 
-    def logger(self):
+    def logger(self, tape):
         with tf.contrib.summary.record_summaries_every_n_global_steps(10, self.global_step):
-            # Log variables
-            tf.contrib.summary.scalar('loss', self.loss)
-            tf.contrib.summary.scalar('reward', self.reward)
-            tf.contrib.summary.scalar('action', self.idx)
-            tf.contrib.summary.scalar('q-values', self.new_q)
-            tf.contrib.summary.scalar('entropy', self.entropy)
 
             # Log weights
             slots = self.optimizer.get_slot_names()
-            for variable in self.tape.watched_variables():
+            for variable in tape.watched_variables():
                     tf.contrib.summary.scalar(variable.name, tf.nn.l2_loss(variable))
 
                     for slot in slots:
@@ -64,79 +75,112 @@ class Q_Learning(object):
                             tf.contrib.summary.scalar(variable.name + '/' + slot, tf.nn.l2_loss(slotvar))
 
     def update(self):
-        # Perform forward pass, construct graph
-        with tf.GradientTape() as self.tape:
-            self.forward()
-            self.reward = self.game.make_action(self.e_greedy(), self.cfg.skiprate)
-            self.loss = tf.losses.mean_squared_error(self.reward + self.cfg.discount * self.new_q, self.old_q)
-            probs = tf.nn.softmax(self.logits)
-            self.entropy = -1 * tf.reduce_sum(probs*tf.math.log(probs))
-            self.loss -= self.entropy * self.cfg.entropy_rate
-
-        self.logger()
+        # Fetch batch of experiences
+        prev_frames, logits, frames, rewards = self.replay_memory.fetch()
+        # Get target Q
+        q = self.forward(frames, True)
+        q = tf.stop_gradient(q)
+        # Get entropy
+        probs = tf.nn.softmax(logits)
+        entropy = -1 * tf.reduce_sum(probs*tf.math.log(probs + 1e-20))
+        # Construct graph
+        with tf.GradientTape() as tape:
+            prev_q = self.forward(prev_frames, True)
+            # Compute loss (q = 0 on terminal state)
+            loss = tf.losses.mean_squared_error(rewards + self.cfg.discount * q, prev_q) - entropy * self.cfg.entropy_rate
+        
+        self.logger(tape)
         # Compute/apply gradients
-        grads = self.tape.gradient(self.loss, self.model.weights)
+        grads = tape.gradient(loss, self.model.weights)
         grads_and_vars = zip(grads, self.model.weights)
         self.optimizer.apply_gradients(grads_and_vars)
 
         self.global_step.assign_add(1)
 
-    def e_greedy(self):
+    def e_greedy(self, choice):
         if random.random() > self.cfg.epsilon:
-            return self.choice
+            return choice.tolist()
         else:
             return random.choice(self.cfg.actions)
 
-    def forward(self):
+    def forward(self, frames, is_replay):
         # Get Q values for all actions
-        self.logits = tf.reduce_sum(self.model(self.frames), axis=0) / 4
-        # Get highest Q value index
-        self.idx = tf.argmax(self.logits, 0)
-        self.new_q = self.logits[self.idx]
-        # Update action to take
-        self.choice = [0, 0, 0]
-        self.choice[self.idx] += 1
+        logits = self.model(frames)
+        # Get list of rows
+        rows = tf.range(tf.shape(logits)[0])
+        # Get indexes of highest Q values
+        cols = tf.argmax(logits, 1, output_type=tf.int32)
+        # Stack rows and columns
+        rows_cols = tf.stack([rows, cols], axis=1)
+        # Slice highest Q values
+        q = tf.gather_nd(logits, rows_cols)
+        if is_replay:
+            return q
+        else:
+            # One-hot action
+            choice = np.zeros(self.cfg.num_actions)
+            choice[cols] += 1
+            # Take action
+            reward = self.game.make_action(self.e_greedy(choice), self.cfg.skiprate)
+            return q, logits, reward
+    
+    def preprocess(self):
+        screen = self.game.get_state().screen_buffer
+        screen = np.multiply(screen, 255.0/screen.max())
+        screen = tf.image.rgb_to_grayscale(screen)
+        screen = tf.image.resize_images(screen, (84, 84))
+        return screen
     
     def train(self):
-        for i in trange(self.cfg.episodes):
+        for episode in trange(self.cfg.episodes):
             # Reduce exploration rate
-            if i % self.cfg.freq == 0:
+            if episode % self.cfg.freq == 0:
                 self.cfg.epsilon -= 0.1
 
             # Setup variables
             self.game.new_episode()
-            self.old_q = 0
-            self.frames = []
-            self.preprocess()
-            for _ in range(3):
-                self.frames.append(self.screen)
+            screen = self.preprocess()
+            frames = []
+            # Init stack of 4 frames
+            for _ in range(4):
+                frames.append(screen)
 
             while not self.game.is_episode_finished():
-                self.preprocess()
-                self.frames.append(self.screen)
+                _, logits, reward = self.forward(tf.reshape(frames, [1, 84, 84, 4]), False)
+                # Update frames with latest image
+                prev_frames = frames[:]
+                frames.pop(0)
+
+                # Reached terminal state
+                if self.game.get_state() is None:
+                    frames.append(self.terminal)
+                else:
+                    frames.append(self.preprocess())
+
+                # Populate memory with experiences
+                self.replay_memory.push([tf.reshape(prev_frames, [84, 84, 4]), logits, tf.reshape(frames, [84, 84, 4]), reward])
+                # Train on experiences from memory
                 self.update()
 
-                #diagnostic(self.logits.numpy(), self.idx.numpy(), self.reward)
-                # Remove oldest frame
-                self.frames.pop(0)
-
     def test(self):
-        self.old_q = 0
-        self.frames = []
         rewards = []
-        for i in trange(self.cfg.test_episodes):
+        for _ in trange(self.cfg.test_episodes):
+            # Setup variables
             self.game.new_episode()
-            while not self.game.is_episode_finished():
-                self.preprocess()
-                # Ensure batch size is 4
-                if len(self.frames) == 4:
-                    self.forward()
-                    reward = self.game.make_action(self.e_greedy(), self.cfg.skiprate)
-                    rewards.append(reward)
-                    # Remove oldest frame
-                    self.frames.pop(0)
-            rewards.append(self.game.get_total_reward())
+            screen = self.preprocess()
+            frames = []
+            # Init stack of 4 frames
+            for _ in range(4):
+                frames.append(screen)
 
+            while not self.game.is_episode_finished():
+                _, _, _ = self.forward(tf.reshape(frames, [1, 84, 84, 4]), False)
+                # Update frames with latest image
+                frames.pop(0)
+                if self.game.get_state() is not None:
+                    frames.append(self.preprocess())
+
+            rewards.append(self.game.get_total_reward())
         print("Average Reward: ", sum(rewards)/self.cfg.test_episodes)
 
 def main(cfg):
