@@ -1,7 +1,7 @@
 import vizdoom as vzd
 import tensorflow as tf
 import numpy as np
-import random, cProfile, pstats
+import random, cProfile, pstats, os
 from tqdm import trange
 from config import get_config
 
@@ -44,10 +44,6 @@ class Q_Learning(object):
         self.game.init()
         self.terminal = tf.zeros([84, 84, 1])
 
-        self.global_step = tf.train.get_or_create_global_step()
-        self.writer = tf.contrib.summary.create_file_writer(self.cfg.log_dir)
-        self.writer.set_as_default()
-
         self.model = tf.keras.Sequential([
             # Filters, Kernel Size, Strides
             tf.keras.layers.Conv2D(32, 8, 4, activation=self.cfg.activ, kernel_initializer=self.cfg.init),
@@ -60,6 +56,12 @@ class Q_Learning(object):
         # Specify input size
         self.model.build((None, 84, 84, 4))
         self.optimizer = tf.train.AdamOptimizer(self.cfg.learning_rate)
+
+        self.global_step = tf.train.get_or_create_global_step()
+        self.saver = tf.train.Checkpoint(optimizer=self.optimizer, model=self.model, optimizer_step=self.global_step)
+        self.checkpoint_prefix = os.path.join(self.cfg.save_dir, "ckpt")
+        self.writer = tf.contrib.summary.create_file_writer(self.cfg.log_dir)
+        self.writer.set_as_default()
 
     def logger(self, tape):
         with tf.contrib.summary.record_summaries_every_n_global_steps(10, self.global_step):
@@ -133,9 +135,13 @@ class Q_Learning(object):
     
     def train(self):
         for episode in trange(self.cfg.episodes):
-            # Reduce exploration rate
-            if episode % self.cfg.freq == 0:
-                self.cfg.epsilon -= 0.1
+            # Reduce exploration rate (45 frames per episode)
+            if (episode * 45) % self.cfg.freq == 0 and self.cfg.epsilon > 0.05:
+                self.cfg.epsilon -= 0.05
+
+            # Save model
+            if episode % 10000 == 0:
+                self.saver.save(file_prefix=self.checkpoint_prefix)
 
             # Setup variables
             self.game.new_episode()
@@ -161,8 +167,11 @@ class Q_Learning(object):
                 self.replay_memory.push([tf.reshape(prev_frames, [84, 84, 4]), logits, tf.reshape(frames, [84, 84, 4]), reward])
                 # Train on experiences from memory
                 self.update()
+        
+        self.saver.save(file_prefix=self.checkpoint_prefix)
 
     def test(self):
+        self.saver.restore(tf.train.latest_checkpoint(self.cfg.save_dir))
         rewards = []
         for _ in trange(self.cfg.test_episodes):
             # Setup variables

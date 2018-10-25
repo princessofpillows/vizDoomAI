@@ -37,12 +37,12 @@ train_arg.add_argument("--epsilon", type=float,
                        help="Probability of exploration")
 
 train_arg.add_argument("--episodes", type=int,
-                       default=100,
+                       default=10000000,
                        help="Number of episodes to train on")
 
 train_arg.add_argument("--freq", type=int,
-                       default=10,
-                       help="Frequency to decrease epsilon")
+                       default=500000,
+                       help="Frequency to decrease epsilon based on frames")
 
 train_arg.add_argument("--entropy_rate", type=int,
                        default=1e-2,
@@ -54,7 +54,11 @@ train_arg.add_argument("--batch_size", type=int,
 
 train_arg.add_argument("--log_dir", type=str,
                        default="./logs",
-                       help="Directory to save logs and current model")
+                       help="Directory to save logs")
+
+train_arg.add_argument("--save_dir", type=str,
+                       default="./saves",
+                       help="Directory to save current model")
 
 # ----------------------------------------
 # Arguments for testing
@@ -93,7 +97,7 @@ model_arg.add_argument("--init",
 mem_arg = add_argument_group("Memory")
 
 mem_arg.add_argument("--cap", type=int,
-                       default=50000,
+                       default=1000000,
                        help="Maximum number of transitions in replay memory")
 
 # ----------------------------------------
