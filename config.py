@@ -32,17 +32,21 @@ train_arg.add_argument("--discount", type=float,
                        default=0.99,
                        help="Ratio of new Q value to use in update")
 
+train_arg.add_argument("--alpha", type=float,
+                       default=0.6,
+                       help="Exponent for experience replay probability (0 is uniform dist)")
+
 train_arg.add_argument("--epsilon", type=float,
                        default=1.0,
-                       help="Probability of exploration")
+                       help="Probability of e-greedy exploration")
+
+train_arg.add_argument("--temp", type=int,
+                       default=0.99,
+                       help="Temperature for boltzmann exploration (higher = more exploration)")
 
 train_arg.add_argument("--episodes", type=int,
-                       default=10000000,
+                       default=10000,
                        help="Number of episodes to train on")
-
-train_arg.add_argument("--freq", type=int,
-                       default=500000,
-                       help="Frequency to decrease epsilon based on frames")
 
 train_arg.add_argument("--entropy_rate", type=int,
                        default=1e-2,
@@ -53,12 +57,24 @@ train_arg.add_argument("--batch_size", type=int,
                        help="Number of experiences to sample from memory")
 
 train_arg.add_argument("--log_dir", type=str,
-                       default="./logs",
+                       default="./dqn_logs/",
                        help="Directory to save logs")
 
+train_arg.add_argument("--log_freq", type=int,
+                       default=10,
+                       help="Number of steps before logging weights")
+
 train_arg.add_argument("--save_dir", type=str,
-                       default="./saves",
+                       default="./dqn_saves/",
                        help="Directory to save current model")
+
+train_arg.add_argument("--save_freq", type=int,
+                       default=100,
+                       help="Number of episodes before saving model")
+
+train_arg.add_argument("-f", "--extension", type=str,
+                       default=None,
+                       help="Specific name to save training session or restore from")
 
 # ----------------------------------------
 # Arguments for testing
@@ -72,32 +88,39 @@ test_arg.add_argument("--test_episodes", type=int,
 # Arguments for model
 model_arg = add_argument_group("Model")
 
+model_arg.add_argument("--model", type=str,
+                       default="atari",
+                       choices=["atari", "alexnet", "zfnet", "vggnet", "googlenet"],
+                       help="Model architecture to use")
+
+model_arg.add_argument("--activ", type=str,
+                       default="relu",
+                       choices=["relu", "elu", "selu", "tanh", "sigmoid"],
+                       help="Activation function to use")
+
+model_arg.add_argument("--init", type=str,
+                       default="glorot_normal",
+                       choices=["glorot_normal", "glorot_uniform", "random_normal", "random_uniform", "truncated_normal"],
+                       help="Initialization function to use")
+
 model_arg.add_argument("--actions", type=int,
                        default=[shoot, left, right],
                        help="Possible actions to take")
-
-model_arg.add_argument("--num_actions", type=int,
-                       default=3,
-                       help="Number of possible actions to take")
 
 model_arg.add_argument("--skiprate", type=int,
                        default=3,
                        help="Number of frames to skip during each action")
 
-model_arg.add_argument("--activ",
-                       default=tf.nn.relu,
-                       help="Activation function to use")
-
-model_arg.add_argument("--init",
-                       default=tf.contrib.layers.xavier_initializer(),
-                       help="Initialization function to use")
+model_arg.add_argument("--num_frames", type=int,
+                       default=4,
+                       help="Number of stacked frames")
 
 # ----------------------------------------
 # Arguments for memory
 mem_arg = add_argument_group("Memory")
 
 mem_arg.add_argument("--cap", type=int,
-                       default=1000000,
+                       default=100000,
                        help="Maximum number of transitions in replay memory")
 
 # ----------------------------------------
