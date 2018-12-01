@@ -12,7 +12,6 @@ shoot = [1, 0, 0]
 left = [0, 1, 0]
 right = [0, 0, 1]
 
-
 # ----------------------------------------
 # Macro for arparse
 def add_argument_group(name):
@@ -30,38 +29,42 @@ train_arg.add_argument("--learning_rate", type=float,
 
 train_arg.add_argument("--discount", type=float,
                        default=0.99,
-                       help="Ratio of new Q value to use in update")
-
-train_arg.add_argument("--alpha", type=float,
-                       default=0.6,
-                       help="Exponent for experience replay probability (0 is uniform dist)")
+                       help="Ensures Q function will converge by providing diminishing returns. Must be < 1")
 
 train_arg.add_argument("--epsilon", type=float,
                        default=1.0,
-                       help="Probability of e-greedy exploration")
+                       help="Probability of e-greedy exploration. Reduced linearly over time")
 
-train_arg.add_argument("--temp", type=int,
-                       default=0.99,
-                       help="Temperature for boltzmann exploration (higher = more exploration)")
+train_arg.add_argument("--batch_size", type=int,
+                       default=32,
+                       help="Number of experiences to sample from memory during training")
 
 train_arg.add_argument("--episodes", type=int,
-                       default=10000,
+                       default=1000,
                        help="Number of episodes to train on")
 
 train_arg.add_argument("--entropy_rate", type=int,
                        default=1e-2,
                        help="Ratio of entropy regularization to apply to loss")
 
-train_arg.add_argument("--batch_size", type=int,
-                       default=100,
-                       help="Number of experiences to sample from memory")
+train_arg.add_argument("--update_target_rate", type=int,
+                       default=1e-2,
+                       help="Frequency to update target network. 1.0 is every episode, 0.1 is every 10 episodes, etc...")
+
+train_arg.add_argument("--alpha", type=float,
+                       default=0.6,
+                       help="Exponent for experience replay probability (0 is uniform dist)")
+
+train_arg.add_argument("--temp", type=int,
+                       default=0.99,
+                       help="Temperature for boltzmann exploration (higher = more exploration)")
 
 train_arg.add_argument("--log_dir", type=str,
                        default="./dqn_logs/",
                        help="Directory to save logs")
 
 train_arg.add_argument("--log_freq", type=int,
-                       default=10,
+                       default=100,
                        help="Number of steps before logging weights")
 
 train_arg.add_argument("--save_dir", type=str,
@@ -91,7 +94,7 @@ model_arg = add_argument_group("Model")
 model_arg.add_argument("--model", type=str,
                        default="atari",
                        choices=["atari", "alexnet", "zfnet", "vggnet", "googlenet"],
-                       help="Model architecture to use")
+                       help="CNN architecture to use")
 
 model_arg.add_argument("--activ", type=str,
                        default="relu",
@@ -109,18 +112,18 @@ model_arg.add_argument("--actions", type=int,
 
 model_arg.add_argument("--skiprate", type=int,
                        default=3,
-                       help="Number of frames to skip during each action")
+                       help="Number of frames to skip during each action. Current action will be repeated for duration of skip")
 
 model_arg.add_argument("--num_frames", type=int,
                        default=4,
-                       help="Number of stacked frames")
+                       help="Number of stacked frames to send to CNN, depicting motion")
 
 # ----------------------------------------
 # Arguments for memory
 mem_arg = add_argument_group("Memory")
 
 mem_arg.add_argument("--cap", type=int,
-                       default=100000,
+                       default=10000,
                        help="Maximum number of transitions in replay memory")
 
 # ----------------------------------------

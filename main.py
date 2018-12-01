@@ -5,7 +5,7 @@ import random, os
 from datetime import datetime
 from pathlib import Path
 from tqdm import trange
-from dqn_config import get_config
+from config import get_config
 from models import atari, alexnet, zfnet, vggnet, googlenet
 
 
@@ -46,7 +46,9 @@ class DQN(object):
         self.game.init()
 
         self.cfg = cfg
-        self.replay_memory = replay_memory(cfg)
+        # Assign replay to CPU due to GPU memory limitations
+        with tf.device('CPU:0'):
+            self.replay_memory = replay_memory(cfg)
         self.global_step = tf.train.get_or_create_global_step()
         self.terminal = tf.zeros([84, 84, 1])
 
@@ -98,22 +100,35 @@ class DQN(object):
         self.target.set_weights(self.model.get_weights())
 
     def update(self):
-        # Fetch batch of experiences
-        prev_frames, logits, rewards, frames = self.replay_memory.fetch()
-        # Get target Q values for all actions
-        target_logits = self.target(frames)
-        target_q = self.approximate_q(target_logits)
-        # Kill gradient
-        target_q = tf.stop_gradient(target_q)
+        with tf.device('CPU:0'):
+            # Fetch batch of experiences
+            s0, logits, rewards, s1 = self.replay_memory.fetch()
+        
         # Get entropy
         probs = tf.nn.softmax(logits)
         entropy = -1 * tf.reduce_sum(probs*tf.math.log(probs + 1e-20))
         # Construct graph
         with tf.GradientTape() as tape:
-            logits = self.model(frames)
-            q = self.approximate_q(logits)
-            # Compute loss (q = 0 on terminal state)
-            loss = 1/2 * tf.reduce_mean(tf.losses.huber_loss(rewards + self.cfg.discount * target_q, q))
+            # Get predicted q values
+            logits = self.model(s0)
+            # Choose max q values for all batches
+            rows = tf.range(tf.shape(logits)[0])
+            cols = tf.argmax(logits, 1, output_type=tf.int32)
+            rows_cols = tf.stack([rows, cols], axis=1)
+            q = tf.gather_nd(logits, rows_cols)
+
+            # Get target q values
+            target_logits = self.target(s1)
+            rows = tf.range(tf.shape(target_logits)[0])
+            # Using columns of selected actions from prediction, stack with target rows
+            rows_cols = tf.stack([rows, cols], axis=1)
+            # Slice Q values, with actions chosen by prediction
+            target_q = tf.gather_nd(logits, rows_cols)
+            # Kill target network gradient
+            target_q = tf.stop_gradient(target_q)
+
+            # Compare target q and predicted q (q = 0 on terminal state)
+            loss = 1/2 * tf.reduce_mean(tf.losses.huber_loss(rewards + self.cfg.discount * target_q, q)) - entropy * self.cfg.entropy_rate
         
         self.logger(tape, loss, q)
         # Compute/apply gradients
@@ -122,17 +137,6 @@ class DQN(object):
         self.optimizer.apply_gradients(grads_and_vars)
 
         self.global_step.assign_add(1)
-
-    def approximate_q(self, logits):
-        # Get list of rows
-        rows = tf.range(tf.shape(logits)[0])
-        # Get indexes of highest Q values
-        cols = tf.argmax(logits, 1, output_type=tf.int32)
-        # Stack rows and columns
-        rows_cols = tf.stack([rows, cols], axis=1)
-        # Slice highest Q values
-        q = tf.gather_nd(logits, rows_cols)
-        return q
     
     def e_greedy(self, choice):
         if random.random() > self.cfg.epsilon:
@@ -144,11 +148,14 @@ class DQN(object):
         logits = self.model(frames)
         # Get indexes of highest Q values
         cols = tf.argmax(logits, 1, output_type=tf.int32)
+        # Slice highest Q values
+        q = logits 
         # One-hot action
         choice = np.zeros(len(self.cfg.actions))
         choice[cols] += 1
         # Take action
         reward = self.game.make_action(self.e_greedy(choice), self.cfg.skiprate)
+        # Modify rewards (game is blackbox)
         '''
         if reward > 50:
             reward = 10
@@ -157,21 +164,21 @@ class DQN(object):
         else:
             reward = -1
         '''
-        return reward, logits
+        return reward, logits, q
     
     def preprocess(self):
         screen = self.game.get_state().screen_buffer
-        screen = np.multiply(screen, 255.0/screen.max())
-        screen = tf.image.rgb_to_grayscale(screen)
-        screen = tf.image.resize_images(screen, self.shape)
-        return screen
+        frame = np.multiply(screen, 255.0/screen.max())
+        frame = tf.image.rgb_to_grayscale(frame)
+        frame = tf.image.resize_images(frame, self.shape)
+        return frame
     
     def train(self):
         self.saver.restore(tf.train.latest_checkpoint(self.cfg.save_dir))
         for episode in trange(self.cfg.episodes):
-            # Reduce exploration rate (45 frames per episode)
+            # Reduce exploration rate linearly. Capped at 0.1 halfway through training
             if self.cfg.epsilon > 0.1:
-                self.cfg.epsilon -= 0.9 / (0.9 * self.cfg.episodes)
+                self.cfg.epsilon -= 0.9 / (0.5 * self.cfg.episodes)
 
             # Save model
             if episode % self.cfg.save_freq == 0:
@@ -179,17 +186,17 @@ class DQN(object):
 
             # Setup variables
             self.game.new_episode()
-            screen = self.preprocess()
+            frame = self.preprocess()
             # Init stack of 4 frames
-            frames = [screen, screen, screen, screen]
+            frames = [frame, frame, frame, frame]
 
             while not self.game.is_episode_finished():
                 s = tf.reshape(frames, [1, self.shape[0], self.shape[1], self.cfg.num_frames])
-                reward, logits = self.perform_action(s)
+                reward, logits, q = self.perform_action(s)
+
                 # Update frames with latest image
                 prev_frames = frames[:]
                 frames.pop(0)
-
                 # Reached terminal state, kill q values
                 if self.game.get_state() is None:
                     frames = [self.terminal, self.terminal, self.terminal, self.terminal]
@@ -199,13 +206,15 @@ class DQN(object):
 
                 s0 = tf.reshape(prev_frames, [self.shape[0], self.shape[1], self.cfg.num_frames])
                 s1 = tf.reshape(frames, [self.shape[0], self.shape[1], self.cfg.num_frames])
+                #priority = tf.abs(reward + self.cfg.discount * q - self.prev_q) + 1e-20
                 with tf.device('CPU:0'):
                     # Populate memory with experiences
                     self.replay_memory.push([s0, logits, reward, s1])
                 
             # Train on experiences from memory
             self.update()
-            if episode % (0.01 * self.cfg.episodes) == 0:
+            # Update target network
+            if episode % (self.cfg.update_target_rate * self.cfg.episodes) == 0:
                 self.update_target()
         
         self.saver.save(file_prefix=self.ckpt_prefix)
@@ -216,16 +225,16 @@ class DQN(object):
         for _ in trange(self.cfg.test_episodes):
             # Setup variables
             self.game.new_episode()
-            screen = self.preprocess()
+            frame = self.preprocess()
             # Init stack of 4 frames
-            frames = [screen, screen, screen, screen]
+            frames = [frame, frame, frame, frame]
 
             while not self.game.is_episode_finished():
                 s = tf.reshape(frames, [1, self.shape[0], self.shape[1], self.cfg.num_frames])
                 _, _ = self.perform_action(s)
                 
+                # Update frames with latest image
                 if self.game.get_state() is not None:
-                    # Update frames with latest image
                     frames.pop(0)
                     frames.append(self.preprocess())
 
