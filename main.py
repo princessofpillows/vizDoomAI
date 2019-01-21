@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from tqdm import trange
 from config import get_config
-from models import atari, alexnet, zfnet, vggnet, googlenet
+from models import atari
 
 
 tf.enable_eager_execution()
