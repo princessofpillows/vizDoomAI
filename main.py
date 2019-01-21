@@ -53,7 +53,7 @@ class DQN(object):
         self.terminal = tf.zeros([84, 84, 1])
 
         # Create network
-        models = {'atari': atari, 'alexnet': alexnet, 'zfnet': zfnet, 'vggnet': vggnet, 'googlenet':googlenet}
+        models = {'atari': atari}
         self.model, self.shape = models[self.cfg.model](self.cfg, len(cfg.actions))
         # Specify input size (None, X, Y, Frames)
         self.model.build((None,) + self.shape + (cfg.num_frames,))
