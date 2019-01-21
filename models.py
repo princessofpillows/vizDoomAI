@@ -1,6 +1,4 @@
 import tensorflow as tf
-from layers import Inception, Auxiliary
-
 
 def atari(cfg, num_classes):
     shape = (84, 84)
