@@ -1,12 +1,13 @@
 import vizdoom as vzd
 import tensorflow as tf
 import numpy as np
-import random, os
+import random, os, cv2
+from tensorboardX import SummaryWriter
 from datetime import datetime
 from pathlib import Path
 from tqdm import trange
 from config import get_config
-from models import atari
+from models import Atari
 
 
 tf.enable_eager_execution()
@@ -31,8 +32,7 @@ class replay_memory(object):
             batch = random.sample(self.memory, size)
         else:
             batch = random.sample(self.memory, self.cfg.batch_size)
-        # Return batch
-        batch = np.asarray(batch, dtype=object)
+        
         return zip(*batch)
 
 
@@ -53,56 +53,58 @@ class DQN(object):
         self.terminal = tf.zeros([84, 84, 1])
 
         # Create network
-        models = {'atari': atari}
-        self.model, self.shape = models[self.cfg.model](self.cfg, len(cfg.actions))
-        # Specify input size (None, X, Y, Frames)
-        self.model.build((None,) + self.shape + (cfg.num_frames,))
+        models = {'atari': Atari}
+        self.model = models[self.cfg.model](self.cfg, len(cfg.actions))
+        self.model.build((None,) + self.model.shape + (cfg.num_frames,))
         self.optimizer = tf.train.AdamOptimizer(self.cfg.learning_rate)
 
         # Create target network
-        self.target, self.target_shape = models[self.cfg.model](self.cfg, len(cfg.actions))
-        self.target.build((None,) + self.target_shape + (cfg.num_frames,))
+        self.target = models[self.cfg.model](self.cfg, len(cfg.actions))
+        self.target.build((None,) + self.target.shape + (cfg.num_frames,))
 
         self.update_target()
         self.build_writers()
 
     def build_writers(self):
-        if not Path(self.cfg.save_dir).is_dir():
-            os.mkdir(self.cfg.save_dir)
-        if self.cfg.extension is None:
-            self.cfg.extension = datetime.now().strftime('%Y-%m-%d_%H:%M:%S')
+        if not Path(cfg.save_dir).is_dir():
+            os.mkdir(cfg.save_dir)
+        if cfg.extension is None:
+            cfg.extension = datetime.now().strftime('%Y-%m-%d_%H:%M:%S')
 
-        self.log_path = self.cfg.log_dir + self.cfg.extension
-        self.writer = tf.contrib.summary.create_file_writer(self.log_path)
-        self.writer.set_as_default()
-
-        self.save_path = self.cfg.save_dir + self.cfg.extension
+        self.save_path = cfg.save_dir + cfg.extension
         self.ckpt_prefix = self.save_path + '/ckpt'
-        self.saver = tf.train.Checkpoint(optimizer=self.optimizer, model=self.model, optimizer_step=self.global_step)
+        self.saver = tf.train.Checkpoint(model=self.model, optimizer=self.optimizer, optimizer_step=self.global_step)
 
-    def logger(self, tape, loss, q):
-        with tf.contrib.summary.record_summaries_every_n_global_steps(self.cfg.log_freq, self.global_step):
-            # Log vars
-            tf.contrib.summary.scalar('loss', loss)
-            tf.contrib.summary.scalar('q', q)
+        log_path = cfg.log_dir + cfg.extension
+        self.writer = SummaryWriter(log_path)
 
-            # Log weights
+    def logger(self, tape, loss):
+        if self.global_step.numpy() % cfg.log_freq == 0:
+            # Log scalars
+            self.writer.add_scalar('loss', loss.numpy(), self.global_step)
+            
+            # Log weight scalars
             slots = self.optimizer.get_slot_names()
             for variable in tape.watched_variables():
-                    tf.contrib.summary.scalar(variable.name, tf.nn.l2_loss(variable))
+                    self.writer.add_scalar(variable.name, tf.nn.l2_loss(variable).numpy(), self.global_step)
 
                     for slot in slots:
                         slotvar = self.optimizer.get_slot(variable, slot)
                         if slotvar is not None:
-                            tf.contrib.summary.scalar(variable.name + '/' + slot, tf.nn.l2_loss(slotvar))
+                            self.writer.add_scalar(variable.name + '/' + slot, tf.nn.l2_loss(slotvar).numpy(), self.global_step)
+
+    def log_state(self, frames):
+        # Log state
+        for i in range(len(frames)):
+            s = np.reshape(frames[i], [1, frames[i].shape[0], frames[i].shape[1]]).astype(np.uint8)
+            self.writer.add_image('state ' + 'n-' + str(i), s, self.global_step)
 
     def update_target(self):
         self.target.set_weights(self.model.get_weights())
 
     def update(self):
-        with tf.device('CPU:0'):
-            # Fetch batch of experiences
-            s0, logits, rewards, s1 = self.replay_memory.fetch()
+        # Fetch batch of experiences
+        s0, logits, rewards, s1 = self.replay_memory.fetch()
         
         # Get entropy
         probs = tf.nn.softmax(logits)
@@ -110,7 +112,7 @@ class DQN(object):
         # Construct graph
         with tf.GradientTape() as tape:
             # Get predicted q values
-            logits = self.model(s0)
+            logits, _ = self.model(s0)
             # Choose max q values for all batches
             rows = tf.range(tf.shape(logits)[0])
             cols = tf.argmax(logits, 1, output_type=tf.int32)
@@ -118,7 +120,7 @@ class DQN(object):
             q = tf.gather_nd(logits, rows_cols)
 
             # Get target q values
-            target_logits = self.target(s1)
+            target_logits, _ = self.target(s1)
             rows = tf.range(tf.shape(target_logits)[0])
             # Using columns of selected actions from prediction, stack with target rows
             rows_cols = tf.stack([rows, cols], axis=1)
@@ -130,7 +132,7 @@ class DQN(object):
             # Compare target q and predicted q (q = 0 on terminal state)
             loss = 1/2 * tf.reduce_mean(tf.losses.huber_loss(rewards + self.cfg.discount * target_q, q)) - entropy * self.cfg.entropy_rate
         
-        self.logger(tape, loss, q)
+        self.logger(tape, loss)
         # Compute/apply gradients
         grads = tape.gradient(loss, self.model.trainable_weights)
         grads_and_vars = zip(grads, self.model.trainable_weights)
@@ -145,14 +147,14 @@ class DQN(object):
             return random.choice(self.cfg.actions)
 
     def perform_action(self, frames):
-        logits = self.model(frames)
+        logits, _ = self.model(frames)
         # Get indexes of highest Q values
         cols = tf.argmax(logits, 1, output_type=tf.int32)
         # Slice highest Q values
         q = logits 
         # One-hot action
         choice = np.zeros(len(self.cfg.actions))
-        choice[cols] += 1
+        choice[tuple(cols)] += 1
         # Take action
         reward = self.game.make_action(self.e_greedy(choice), self.cfg.skiprate)
         # Modify rewards (game is blackbox)
@@ -170,7 +172,7 @@ class DQN(object):
         screen = self.game.get_state().screen_buffer
         frame = np.multiply(screen, 255.0/screen.max())
         frame = tf.image.rgb_to_grayscale(frame)
-        frame = tf.image.resize_images(frame, self.shape)
+        frame = tf.image.resize_images(frame, self.model.shape)
         return frame
     
     def train(self):
@@ -190,9 +192,13 @@ class DQN(object):
             # Init stack of 4 frames
             frames = [frame, frame, frame, frame]
 
+            count = 0
             while not self.game.is_episode_finished():
-                s = tf.reshape(frames, [1, self.shape[0], self.shape[1], self.cfg.num_frames])
+                s = tf.reshape(frames, [1, self.model.shape[0], self.model.shape[1], self.cfg.num_frames])
                 reward, logits, q = self.perform_action(s)
+
+                if count % self.cfg.num_frames == 0:
+                    self.log_state(frames)
 
                 # Update frames with latest image
                 prev_frames = frames[:]
@@ -204,12 +210,13 @@ class DQN(object):
                 else:
                     frames.append(self.preprocess())
 
-                s0 = tf.reshape(prev_frames, [self.shape[0], self.shape[1], self.cfg.num_frames])
-                s1 = tf.reshape(frames, [self.shape[0], self.shape[1], self.cfg.num_frames])
+                s0 = tf.reshape(prev_frames, [self.model.shape[0], self.model.shape[1], self.cfg.num_frames])
+                s1 = tf.reshape(frames, [self.model.shape[0], self.model.shape[1], self.cfg.num_frames])
                 #priority = tf.abs(reward + self.cfg.discount * q - self.prev_q) + 1e-20
-                with tf.device('CPU:0'):
-                    # Populate memory with experiences
-                    self.replay_memory.push([s0, logits, reward, s1])
+                # Populate memory with experiences
+                self.replay_memory.push([s0, logits, reward, s1])
+
+                count += 1
                 
             # Train on experiences from memory
             self.update()
@@ -230,8 +237,8 @@ class DQN(object):
             frames = [frame, frame, frame, frame]
 
             while not self.game.is_episode_finished():
-                s = tf.reshape(frames, [1, self.shape[0], self.shape[1], self.cfg.num_frames])
-                _, _ = self.perform_action(s)
+                s = tf.reshape(frames, [1, self.model.shape[0], self.model.shape[1], self.cfg.num_frames])
+                _, _, _ = self.perform_action(s)
                 
                 # Update frames with latest image
                 if self.game.get_state() is not None:

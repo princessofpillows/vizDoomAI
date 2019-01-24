@@ -40,7 +40,7 @@ train_arg.add_argument("--batch_size", type=int,
                        help="Number of experiences to sample from memory during training")
 
 train_arg.add_argument("--episodes", type=int,
-                       default=1000,
+                       default=100,
                        help="Number of episodes to train on")
 
 train_arg.add_argument("--entropy_rate", type=int,
@@ -60,15 +60,15 @@ train_arg.add_argument("--temp", type=int,
                        help="Temperature for boltzmann exploration (higher = more exploration)")
 
 train_arg.add_argument("--log_dir", type=str,
-                       default="./dqn_logs/",
+                       default="./logs/",
                        help="Directory to save logs")
 
 train_arg.add_argument("--log_freq", type=int,
-                       default=100,
+                       default=10,
                        help="Number of steps before logging weights")
 
 train_arg.add_argument("--save_dir", type=str,
-                       default="./dqn_saves/",
+                       default="./saves/",
                        help="Directory to save current model")
 
 train_arg.add_argument("--save_freq", type=int,
@@ -93,7 +93,7 @@ model_arg = add_argument_group("Model")
 
 model_arg.add_argument("--model", type=str,
                        default="atari",
-                       choices=["atari", "alexnet", "zfnet", "vggnet", "googlenet"],
+                       choices=["atari"],
                        help="CNN architecture to use")
 
 model_arg.add_argument("--activ", type=str,
